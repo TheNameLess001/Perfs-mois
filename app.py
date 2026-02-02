@@ -3,40 +3,37 @@ import pandas as pd
 import unicodedata
 import re
 
-st.set_page_config(page_title="Performance Sales", layout="wide")
+st.set_page_config(page_title="Performance Sales & Ops", layout="wide")
 
 def clean_string(text):
-    """Normalisation totale pour le matching (enlève accents, espaces, majuscules)."""
+    """Normalisation pour le matching : pas d'accents, pas de majuscules, pas de symboles."""
     if pd.isna(text):
         return ""
-    # Enlever les accents
     text = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
-    # Garder uniquement lettres et chiffres
     text = re.sub(r'[^a-zA-Z0-9]', '', text).lower()
     return text.strip()
 
-st.title("📊 Dashboard Performance & Sales")
+st.title("🚀 Dashboard Performance : Restaurants & Commerciaux")
 
 # --- 1. CHARGEMENT DES FICHIERS ---
-st.sidebar.header("📁 Import des fichiers")
+st.sidebar.header("📁 Chargement des données")
 res_file = st.sidebar.file_uploader("1. Restaurant List (CSV ;)", type="csv")
 orders_file = st.sidebar.file_uploader("2. Export Commandes (CSV)", type="csv")
 sales_file = st.sidebar.file_uploader("3. Fichier Sales (Creation par sales)", type="csv")
 
 if res_file and orders_file:
-    # Lecture des fichiers principaux
+    # Lecture
     res_df = pd.read_csv(res_file, sep=';')
     orders_df = pd.read_csv(orders_file)
     
-    # Dates
+    # Conversion Dates
     res_df['Created At'] = pd.to_datetime(res_df['Created At'], dayfirst=True, errors='coerce')
     orders_df['order day'] = pd.to_datetime(orders_df['order day'], errors='coerce')
     
-    # Référence pour l'ancienneté
+    # --- 2. CALCULS DE BASE ---
     ref_date = orders_df['order day'].max()
     res_df['Ancienneté (Jours)'] = (ref_date - res_df['Created At']).dt.days
 
-    # Performance
     delivered = orders_df[orders_df['status'] == 'Delivered']
     perf_res = delivered.groupby('Restaurant ID').agg(
         Commandes=('order id', 'count'),
@@ -46,21 +43,15 @@ if res_file and orders_file:
     main_df = pd.merge(res_df, perf_res, left_on='Id', right_on='Restaurant ID', how='left')
     main_df[['Commandes', 'CA_Total']] = main_df[['Commandes', 'CA_Total']].fillna(0)
 
-    # --- 2. MAPPING SALES (CORRECTIF NOM DU COMMERCIAL) ---
+    # --- 3. MAPPING COMMERCIAL (SALES) ---
     nom_comm_col = "Nom du commercial"
-    
     if sales_file:
         sales_df = pd.read_csv(sales_file)
-        
-        # Mapping spécifique selon tes colonnes : "Sales Rep" et "Nom de l'établissement"
-        # On crée les clés de matching propres
+        # On utilise tes colonnes : "Sales Rep" et "Nom de l'établissement"
         main_df['match_key'] = main_df['Restaurant Name'].apply(clean_string)
         sales_df['match_key'] = sales_df["Nom de l'établissement"].apply(clean_string)
         
-        # On prépare le dictionnaire de correspondance
         sales_map = sales_df[['match_key', 'Sales Rep']].drop_duplicates('match_key')
-        
-        # Fusion
         main_df = pd.merge(main_df, sales_map, on='match_key', how='left')
         main_df = main_df.rename(columns={'Sales Rep': nom_comm_col})
     else:
@@ -68,34 +59,43 @@ if res_file and orders_file:
 
     main_df[nom_comm_col] = main_df[nom_comm_col].fillna("Non Assigné")
 
-    # --- 3. FILTRE DE DATE ---
+    # --- 4. FILTRES SIDEBAR ---
     st.sidebar.markdown("---")
-    min_d = res_df['Created At'].min()
-    max_d = res_df['Created At'].max()
+    st.sidebar.header("🎯 Filtres d'affichage")
     
-    start_date, end_date = st.sidebar.date_input(
-        "Filtrer par date de création :",
-        value=(pd.to_datetime("2025-12-01"), pd.to_datetime("2026-01-31")),
-        min_value=min_d,
-        max_value=max_d
-    )
+    # Filtre Date
+    min_d, max_d = res_df['Created At'].min(), res_df['Created At'].max()
+    start_date, end_date = st.sidebar.date_input("Date de création :", [pd.to_datetime("2025-12-01"), pd.to_datetime("2026-01-31")])
 
+    # NOUVEAU : Filtre par Nom de Commercial
+    liste_sales = ["Tous"] + sorted(main_df[nom_comm_col].unique().tolist())
+    selected_sales = st.sidebar.selectbox("Filtrer par Commercial :", liste_sales)
+
+    # Application des filtres
     filtered_df = main_df[
         (main_df['Created At'] >= pd.to_datetime(start_date)) & 
         (main_df['Created At'] <= pd.to_datetime(end_date))
     ]
+    
+    if selected_sales != "Tous":
+        filtered_df = filtered_df[filtered_df[nom_comm_col] == selected_sales]
 
-    # --- 4. AFFICHAGE DES ONGLETS ---
-    tab1, tab2 = st.tabs(["📋 Détails Restaurants", "🏆 Performance par Commercial"])
+    # --- 5. AFFICHAGE DES ONGLETS ---
+    tab1, tab2 = st.tabs(["📋 Détails Restaurants", "🏆 Performance par Sales"])
 
     with tab1:
-        st.subheader(f"Restaurants créés entre {start_date} et {end_date}")
+        st.subheader(f"Détails des établissements ({selected_sales})")
         disp_cols = ['Restaurant Name', 'Main City', 'Created At', 'Ancienneté (Jours)', 'Commandes', 'CA_Total', nom_comm_col]
         st.dataframe(filtered_df[disp_cols].sort_values(by='Commandes', ascending=False), use_container_width=True)
 
     with tab2:
-        st.subheader("Classement des Commerciaux (Basé sur le filtre de date)")
-        agg_sales = filtered_df.groupby(nom_comm_col).agg(
+        st.subheader("Performance globale par Commercial")
+        # Le résumé Sales reste basé sur le filtre de date mais ignore le filtre "Nom du commercial" pour garder le classement complet
+        full_period_df = main_df[
+            (main_df['Created At'] >= pd.to_datetime(start_date)) & 
+            (main_df['Created At'] <= pd.to_datetime(end_date))
+        ]
+        agg_sales = full_period_df.groupby(nom_comm_col).agg(
             Restos_Signés=('Restaurant Name', 'count'),
             Total_Commandes=('Commandes', 'sum'),
             CA_Généré=('CA_Total', 'sum')
@@ -105,7 +105,7 @@ if res_file and orders_file:
 
     # Export
     csv = filtered_df[disp_cols].to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Télécharger l'export Sheets", data=csv, file_name='performance_sales_final.csv')
+    st.download_button("📥 Télécharger cet export", data=csv, file_name='performance_sales_custom.csv')
 
 else:
-    st.info("Veuillez charger les 3 fichiers CSV pour lancer l'analyse.")
+    st.warning("Veuillez charger les fichiers CSV dans la barre latérale.")
