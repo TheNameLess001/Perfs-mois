@@ -6,10 +6,12 @@ import re
 st.set_page_config(page_title="Performance Sales & Ops", layout="wide")
 
 def clean_string(text):
-    """Normalisation pour le matching : pas d'accents, pas de majuscules, pas de symboles."""
+    """Normalisation totale : enlève accents, majuscules, et caractères spéciaux."""
     if pd.isna(text):
         return ""
+    # Enlever les accents (ex: 'É' devient 'E')
     text = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
+    # Garder uniquement lettres et chiffres, tout en minuscule
     text = re.sub(r'[^a-zA-Z0-9]', '', text).lower()
     return text.strip()
 
@@ -47,13 +49,17 @@ if res_file and orders_file:
     nom_comm_col = "Nom du commercial"
     if sales_file:
         sales_df = pd.read_csv(sales_file)
-        # On utilise tes colonnes : "Sales Rep" et "Nom de l'établissement"
+        
+        # Nettoyage des noms de restos pour le lien
         main_df['match_key'] = main_df['Restaurant Name'].apply(clean_string)
         sales_df['match_key'] = sales_df["Nom de l'établissement"].apply(clean_string)
         
-        sales_map = sales_df[['match_key', 'Sales Rep']].drop_duplicates('match_key')
+        # Nettoyage des noms de commerciaux (pour éviter Doublons Majuscules/Accents)
+        # On garde une version propre pour l'affichage mais on groupe sur une base normalisée
+        sales_df[nom_comm_col] = sales_df['Sales Rep'].str.strip().str.title() # Format Pro : "Ihssane"
+        
+        sales_map = sales_df[['match_key', nom_comm_col]].drop_duplicates('match_key')
         main_df = pd.merge(main_df, sales_map, on='match_key', how='left')
-        main_df = main_df.rename(columns={'Sales Rep': nom_comm_col})
     else:
         main_df[nom_comm_col] = "Non Assigné"
 
@@ -63,11 +69,11 @@ if res_file and orders_file:
     st.sidebar.markdown("---")
     st.sidebar.header("🎯 Filtres d'affichage")
     
-    # Filtre Date
+    # Filtre Date de création
     min_d, max_d = res_df['Created At'].min(), res_df['Created At'].max()
     start_date, end_date = st.sidebar.date_input("Date de création :", [pd.to_datetime("2025-12-01"), pd.to_datetime("2026-01-31")])
 
-    # NOUVEAU : Filtre par Nom de Commercial
+    # Filtre par Nom de Commercial (Nettoyé)
     liste_sales = ["Tous"] + sorted(main_df[nom_comm_col].unique().tolist())
     selected_sales = st.sidebar.selectbox("Filtrer par Commercial :", liste_sales)
 
@@ -75,7 +81,7 @@ if res_file and orders_file:
     filtered_df = main_df[
         (main_df['Created At'] >= pd.to_datetime(start_date)) & 
         (main_df['Created At'] <= pd.to_datetime(end_date))
-    ]
+    ].copy()
     
     if selected_sales != "Tous":
         filtered_df = filtered_df[filtered_df[nom_comm_col] == selected_sales]
@@ -90,11 +96,12 @@ if res_file and orders_file:
 
     with tab2:
         st.subheader("Performance globale par Commercial")
-        # Le résumé Sales reste basé sur le filtre de date mais ignore le filtre "Nom du commercial" pour garder le classement complet
+        # Le résumé Sales utilise le filtre de date
         full_period_df = main_df[
             (main_df['Created At'] >= pd.to_datetime(start_date)) & 
             (main_df['Created At'] <= pd.to_datetime(end_date))
-        ]
+        ].copy()
+        
         agg_sales = full_period_df.groupby(nom_comm_col).agg(
             Restos_Signés=('Restaurant Name', 'count'),
             Total_Commandes=('Commandes', 'sum'),
@@ -105,7 +112,7 @@ if res_file and orders_file:
 
     # Export
     csv = filtered_df[disp_cols].to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Télécharger cet export", data=csv, file_name='performance_sales_custom.csv')
+    st.download_button("📥 Télécharger cet export", data=csv, file_name='performance_sales_final.csv')
 
 else:
-    st.warning("Veuillez charger les fichiers CSV dans la barre latérale.")
+    st.info("Veuillez charger les fichiers CSV pour afficher les résultats.")
